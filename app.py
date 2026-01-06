@@ -210,18 +210,22 @@ st.title("All Saints University – Applicant Prioritization Tool")
 
 st.write("Upload your Wufoo export (Excel `.xlsx`) to score and filter applicants.")
 
-uploaded_file = st.file_uploader("Upload applicant file (.xlsx or .csv)", type=["xlsx", "csv"])
+uploaded_file = st.file_uploader(
+    "Upload applicant file (.xlsx, .xls, .csv)",
+    type=["xlsx", "xls", "csv"]
+)
 
 if uploaded_file is not None:
-    try:
-        file_name = uploaded_file.name.lower()
+    file_name = uploaded_file.name.lower()
 
+    try:
         if file_name.endswith(".csv"):
             df = pd.read_csv(uploaded_file, dtype=str)
         else:
             df = pd.read_excel(uploaded_file, dtype=str)
+
     except Exception as e:
-        st.error(f"Could not read Excel file: {e}")
+        st.error(f"Could not read file: {e}")
         st.stop()
 
     st.success(f"Loaded {df.shape[0]} rows and {df.shape[1]} columns.")

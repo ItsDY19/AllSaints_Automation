@@ -220,9 +220,20 @@ if uploaded_file is not None:
 
     try:
         if file_name.endswith(".csv"):
+            # CSV
             df = pd.read_csv(uploaded_file, dtype=str)
+
+        elif file_name.endswith(".xlsx"):
+            # Modern Excel
+            df = pd.read_excel(uploaded_file, dtype=str, engine="openpyxl")
+
+        elif file_name.endswith(".xls"):
+            # Old Excel 97-2003: needs xlrd
+            df = pd.read_excel(uploaded_file, dtype=str, engine="xlrd")
+
         else:
-            df = pd.read_excel(uploaded_file, dtype=str)
+            st.error("Unsupported file type. Please upload .csv, .xlsx or .xls")
+            st.stop()
 
     except Exception as e:
         st.error(f"Could not read file: {e}")

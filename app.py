@@ -5,19 +5,18 @@ from io import BytesIO
 
 # ========== CONFIG ==========
 
-# Change these to match your Excel column headers
 COLS = {
     "age": "Age",                         # age or birth year
     "degree": "Has Degree",               # Yes / No
     "country": "Country of Citizenship",  # text
-    "personal_statement": "Personal Statement",  # text
-    "self_sponsorship": "Self Sponsorship",      # Yes / No
-    "family_support": "Parent/Family Support",   # Yes / No
-    "private_loan": "Private Loan",             # Yes / No
-    "third_party_scholarship": "Third Party Scholarship"  # Yes / No
+    "personal_statement": "Personal Statement",
+    "self_sponsorship": "Self Sponsorship",
+    "family_support": "Parent/Family Support",
+    "private_loan": "Private Loan",
+    "third_party_scholarship": "Scholarship From a Third Party",
+    "other_sources": "Other Sources",     # <--- NEW
 }
 
-# Columns to show in high-priority export
 HIGH_PRIORITY_COLUMNS = [
     "Name",
     "Last",
@@ -28,8 +27,16 @@ HIGH_PRIORITY_COLUMNS = [
     "Country of Citizenship",
     "Score",
     "Category",
-    "Reasons"
+    "Reasons",
 ]
+
+# Weights (you can tweak these later)
+SELF_SPONSOR_WEIGHT = 2
+FAMILY_SUPPORT_WEIGHT = SELF_SPONSOR_WEIGHT + 3   # family should be 3 higher -> 5
+PRIVATE_LOAN_WEIGHT = 3
+EXTERNAL_SCHOLAR_CONFIRMED_WEIGHT = 1
+EXTERNAL_SCHOLAR_PLANNED_WEIGHT = 0      # only planning to apply -> weaker
+ASU_SCHOLAR_PENALTY = 0                  # or -1 if you want
 
 EUROPE_COUNTRIES = [
     "united kingdom", "uk", "england", "ireland", "germany", "france",
@@ -44,6 +51,9 @@ SCHOLARSHIP_NEED_KEYWORDS = [
     "need support", "help with fees", "help pay", "help me pay",
     "fund my studies", "sponsor me"
 ]
+
+NEGATIVE_WORDS = {"", "none", "no", "no source", "nothing", "n/a", "na", "nil"}
+
 
 # ============================
 
@@ -71,6 +81,92 @@ def normalize_age(raw):
     if 10 <= x <= 80:               # age
         return x
     return None
+
+def clean_text(value) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip().lower()
+
+
+def has_family_support_text(value) -> bool:
+    """
+    Any non-empty, non-'none' text that mentions family/relatives/guardians.
+    Works for: 'Parents', 'Parents and family support',
+    'Yes, my maternal uncle...', 'Family members', 'Yes' (in this field).
+    """
+    t = clean_text(value)
+    if t in NEGATIVE_WORDS:
+        return False
+    family_keywords = [
+        "parent", "parents", "family", "uncle", "aunt", "relative",
+        "guardian", "grand", "spouse", "husband", "wife",
+        "brother", "sister", "cousin", "father", "mother"
+    ]
+    if any(k in t for k in family_keywords):
+        return True
+    if "yes" in t:
+        return True
+    return False
+
+
+def has_self_support_text(value) -> bool:
+    """
+    Look for genuine self-funding: 'self', 'self sponsored',
+    'own savings', 'working and schooling', 'salary' etc.
+    """
+    t = clean_text(value)
+    if t in NEGATIVE_WORDS:
+        return False
+    self_keywords = [
+        "self", "own savings", "my savings", "saving",
+        "working", "work and study", "work and schooling",
+        "salary", "income", "job", "yes"
+    ]
+    return any(k in t for k in self_keywords)
+
+
+def has_private_loan_text(value) -> bool:
+    """
+    Detects bank/study/student loan.
+    """
+    t = clean_text(value)
+    if t in NEGATIVE_WORDS:
+        return False
+    loan_keywords = ["loan", "bank", "credit", "lender", "student loan", "study loan", "yes"]
+    return any(k in t for k in loan_keywords)
+
+
+def parse_scholarship_text(value):
+    """
+    Classify scholarship-related text into:
+        - external_confirmed
+        - external_planned
+        - asu_school_scholarship
+    based on keywords.
+    """
+    t = clean_text(value)
+    if t in NEGATIVE_WORDS:
+        return {"external_confirmed": False, "external_planned": False, "asu_school": False}
+
+    # Any scholarship/bursary/grant/NSFAS/SASSA/etc.
+    schol_keywords = [
+        "scholar", "bursary", "grant", "nsfas", "sassa", "sponsor", "sponsorship", "fund"
+    ]
+    if not any(k in t for k in schol_keywords):
+        return {"external_confirmed": False, "external_planned": False, "asu_school": False}
+
+    # If text clearly mentions All Saints / school -> ASU scholarship
+    if "all saints" in t or ("school" in t and "scholar" in t) or ("university" in t and "scholar" in t):
+        return {"external_confirmed": False, "external_planned": False, "asu_school": True}
+
+    # If they say they PLAN to apply/seek
+    planned_words = ["plan", "planning", "apply", "applying", "seek", "seeking", "looking"]
+    if any(w in t for w in planned_words):
+        return {"external_confirmed": False, "external_planned": True, "asu_school": False}
+
+    # Otherwise treat as external confirmed
+    return {"external_confirmed": True, "external_planned": False, "asu_school": False}
+
 
 
 def age_degree_points(age, has_degree: bool):
@@ -134,48 +230,72 @@ def score_row(row: pd.Series) -> pd.Series:
     score = 0
     reasons = []
 
-    # Self sponsorship
-    if is_yes(row.get(COLS["self_sponsorship"])):
-        score += 3
-        reasons.append("Self sponsorship: YES")
+    # -------- Self sponsorship (based on text) --------
+    if has_self_support_text(row.get(COLS["self_sponsorship"])):
+        score += SELF_SPONSOR_WEIGHT
+        reasons.append("Self funding from own work/savings")
 
-    # Family support
-    if is_yes(row.get(COLS["family_support"])):
-        score += 2
-        reasons.append("Parent/Family support: YES")
+    # -------- Family support (from Parent/Family Support + Other Sources) --------
+    family_field = row.get(COLS["family_support"])
+    other_sources_field = row.get(COLS["other_sources"])
 
-    # Private loan
-    if is_yes(row.get(COLS["private_loan"])):
-        score += 2
-        reasons.append("Private loan arranged")
+    has_family = (
+        has_family_support_text(family_field) or
+        has_family_support_text(other_sources_field)
+    )
 
-    # Third-party scholarship
-    if is_yes(row.get(COLS["third_party_scholarship"])):
-        score += 1
-        reasons.append("Third-party scholarship (non-ASU)")
+    if has_family:
+        score += FAMILY_SUPPORT_WEIGHT
+        reasons.append("Parent/Family financial support identified")
 
-    # Age + degree
+    # -------- Private loan --------
+    if has_private_loan_text(row.get(COLS["private_loan"])):
+        score += PRIVATE_LOAN_WEIGHT
+        reasons.append("Private / bank loan arranged or intended")
+
+    # -------- Third-party scholarship (non-ASU) + other sources --------
+    third_party_info = parse_scholarship_text(row.get(COLS["third_party_scholarship"]))
+    other_sources_info = parse_scholarship_text(row.get(COLS["other_sources"]))
+
+    external_confirmed = third_party_info["external_confirmed"] or other_sources_info["external_confirmed"]
+    external_planned = third_party_info["external_planned"] or other_sources_info["external_planned"]
+    asu_school_scholar = third_party_info["asu_school"] or other_sources_info["asu_school"]
+
+    if external_confirmed:
+        score += EXTERNAL_SCHOLAR_CONFIRMED_WEIGHT
+        reasons.append("Confirmed scholarship/bursary from external source")
+
+    if external_planned:
+        score += EXTERNAL_SCHOLAR_PLANNED_WEIGHT
+        if EXTERNAL_SCHOLAR_PLANNED_WEIGHT > 0:
+            reasons.append("Plans to apply for external scholarship/bursary")
+
+    if ASU_SCHOLAR_PENALTY != 0 and asu_school_scholar:
+        score += ASU_SCHOLAR_PENALTY
+        reasons.append("Depends on scholarship from ASU/school")
+
+    # -------- Age + degree --------
     has_deg = is_yes(row.get(COLS["degree"]))
     age_val = normalize_age(row.get(COLS["age"]))
     age_pts, age_reasons = age_degree_points(age_val, has_deg)
     score += age_pts
     reasons.extend(age_reasons)
 
-    # Country-based auto top priority
+    # -------- Country-based auto top priority --------
     is_region_top, c_pts, c_reasons = country_priority_flag(
         row.get(COLS["country"])
     )
     score += c_pts
     reasons.extend(c_reasons)
 
-    # Personal statement asking ASU for scholarship
+    # -------- Personal statement asking ASU for scholarship --------
     if personal_statement_requests_school_scholarship(
         row.get(COLS["personal_statement"])
     ):
         score -= 2
         reasons.append("Personal statement suggests need for ASU scholarship")
 
-    # Category
+    # -------- Category decision --------
     if is_region_top:
         category = "Top priority (Canada / US / Europe)"
     else:
@@ -196,6 +316,7 @@ def score_row(row: pd.Series) -> pd.Series:
     })
 
 
+
 def to_excel_bytes(df: pd.DataFrame) -> bytes:
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
@@ -208,7 +329,7 @@ def to_excel_bytes(df: pd.DataFrame) -> bytes:
 
 st.title("All Saints University – Applicant Prioritization Tool")
 
-st.write("Upload your Wufoo export (Excel `.xlsx`) to score and filter applicants.")
+st.write("Upload your Wufoo export (Excel `.xlsx` or `.csv`) to score and filter applicants.")
 
 uploaded_file = st.file_uploader(
     "Upload applicant file (.xlsx or .csv)",

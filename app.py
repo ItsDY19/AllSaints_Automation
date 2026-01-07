@@ -6,15 +6,15 @@ from io import BytesIO
 # ========== CONFIG ==========
 
 COLS = {
-    "age": "Age",                         # age or birth year
-    "degree": "Has Degree",               # Yes / No
-    "country": "Country of Citizenship",  # text
+    "age": "Date of Birth",                         
+    "degree": "Degree",               
+    "country": "Country of Citizenship",  
     "personal_statement": "Personal Statement",
     "self_sponsorship": "Self Sponsorship",
     "family_support": "Parent/Family Support",
     "private_loan": "Private Loan",
     "third_party_scholarship": "Scholarship From a Third Party",
-    "other_sources": "Other Sources",     # <--- NEW
+    "other_sources": "Other Sources",     
 }
 
 HIGH_PRIORITY_COLUMNS = [
@@ -30,13 +30,13 @@ HIGH_PRIORITY_COLUMNS = [
     "Reasons",
 ]
 
-# Weights (you can tweak these later)
-SELF_SPONSOR_WEIGHT = 2
-FAMILY_SUPPORT_WEIGHT = SELF_SPONSOR_WEIGHT + 3   # family should be 3 higher -> 5
-PRIVATE_LOAN_WEIGHT = 3
-EXTERNAL_SCHOLAR_CONFIRMED_WEIGHT = 1
-EXTERNAL_SCHOLAR_PLANNED_WEIGHT = 0      # only planning to apply -> weaker
-ASU_SCHOLAR_PENALTY = 0                  # or -1 if you want
+# Weights of point system (change to what fits best)
+SELF_SPONSOR_WEIGHT = 18
+FAMILY_SUPPORT_WEIGHT = 28  
+PRIVATE_LOAN_WEIGHT = 24
+EXTERNAL_SCHOLAR_CONFIRMED_WEIGHT = 14
+EXTERNAL_SCHOLAR_PLANNED_WEIGHT = 8      
+ASU_SCHOLAR_PENALTY = -15                 
 
 EUROPE_COUNTRIES = [
     "united kingdom", "uk", "england", "ireland", "germany", "france",
@@ -58,34 +58,66 @@ NEGATIVE_WORDS = {"", "none", "no", "no source", "nothing", "n/a", "na", "nil"}
 # ============================
 
 
-def is_yes(value) -> bool:
-    if isinstance(value, str):
-        v = value.strip().lower()
-        return v in {"yes", "y", "true", "1"}
-    if isinstance(value, (int, float)):
-        return value == 1
-    return False
-
-
 def normalize_age(raw):
+    """
+    Tries to turn various raw DOB / age formats into an age in years.
+
+    Handles:
+      - plain ages: 19, 22, "21"
+      - birth years: 2003, "2001"
+      - full dates: "Tuesday 8 March 2005", "2005-03-08", etc.
+    """
     if raw is None or (isinstance(raw, float) and pd.isna(raw)):
         return None
-    try:
-        x = int(str(raw).split()[0])
-    except Exception:
-        return None
 
+    s = str(raw).strip()
     current_year = date.today().year
-    if 1900 <= x <= current_year:   # birth year
-        return current_year - x
-    if 10 <= x <= 80:               # age
-        return x
+
+    # 1) Try plain integer first (age or birth year)
+    try:
+        x = int(s)
+        if 1900 <= x <= current_year:      # looks like birth year
+            return current_year - x
+        if 10 <= x <= 80:                  # looks like age
+            return x
+    except Exception:
+        pass
+
+    # 2) Try parsing full date (e.g. "Tuesday 8 March 2005")
+    try:
+        dt = pd.to_datetime(s, errors="raise", dayfirst=True)
+        year = dt.year
+        if 1900 <= year <= current_year:
+            return current_year - year
+    except Exception:
+        pass
+
+    # 3) Fallback: look for a 4-digit year anywhere in the string
+    for token in s.split():
+        if token.isdigit() and len(token) == 4:
+            y = int(token)
+            if 1900 <= y <= current_year:
+                return current_year - y
+
+    # Couldn't figure it out
     return None
+
 
 def clean_text(value) -> str:
     if not isinstance(value, str):
         return ""
     return value.strip().lower()
+
+
+def has_degree_text(value) -> bool:
+    """
+    Treat any non-empty degree text that isn't 'none' / 'n/a' as having a degree.
+    Works for things like 'BSc', 'MSc (Public Health)', 'SSCE', etc.
+    """
+    t = clean_text(value)
+    if t in NEGATIVE_WORDS:
+        return False
+    return t != ""
 
 
 def has_family_support_text(value) -> bool:
@@ -170,30 +202,49 @@ def parse_scholarship_text(value):
 
 
 def age_degree_points(age, has_degree: bool):
+    """
+    Returns:
+        points (int)
+        reasons (list[str])
+
+    Always produces a reason — even when no points awarded.
+    """
     if age is None:
-        return 0, []
+        return 0, ["Age unknown (no points applied)"]
 
     points = 0
     reasons = []
 
+    # --- Degree + Age conditions ---
+
     if has_degree and age >= 24:
-        points += 2
+        points += 17
         reasons.append("Has degree and age ≥ 24")
+
     elif has_degree and 21 <= age <= 23:
-        points += 1
+        points += 12
         reasons.append("Has degree and age 21–23")
+
     elif (not has_degree) and age >= 24:
-        points += 1
-        reasons.append("Age ≥ 24 (more likely to self-fund)")
+        points += 7
+        reasons.append("Age ≥ 24 without degree (may be financially independent)")
+
+    else:
+        # Explicit neutral explanation
+        if has_degree:
+            reasons.append(f"Has degree but age {age} (<21) — no maturity bonus")
+        else:
+            reasons.append(f"No degree and age {age} — no maturity bonus")
 
     return points, reasons
+
 
 
 def country_priority_flag(country_raw: str):
     """
     Returns:
         is_region_top (bool), points (int), reasons (list[str])
-    Anyone from Canada / US / Europe is automatic top priority region.
+    Canada / US / Europe get a strong region bonus on a 0–100 scale.
     """
     if not isinstance(country_raw, str):
         return False, 0, []
@@ -204,17 +255,17 @@ def country_priority_flag(country_raw: str):
     # Canada
     if "canada" in c:
         reasons.append("From Canada — automatic top priority region")
-        return True, 3, reasons
+        return True, 40, reasons
 
     # USA
     if "united states" in c or "usa" in c or "u.s.a" in c or "america" in c:
         reasons.append("From USA — automatic top priority region")
-        return True, 3, reasons
+        return True, 40, reasons
 
     # Europe
     if any(e in c for e in EUROPE_COUNTRIES):
         reasons.append("From Europe — automatic top priority region")
-        return True, 3, reasons
+        return True, 40, reasons
 
     return False, 0, reasons
 
@@ -231,7 +282,9 @@ def score_row(row: pd.Series) -> pd.Series:
     reasons = []
 
     # -------- Self sponsorship (based on text) --------
-    if has_self_support_text(row.get(COLS["self_sponsorship"])):
+    self_support_raw = row.get(COLS["self_sponsorship"])
+    has_self = has_self_support_text(self_support_raw)
+    if has_self:
         score += SELF_SPONSOR_WEIGHT
         reasons.append("Self funding from own work/savings")
 
@@ -249,7 +302,9 @@ def score_row(row: pd.Series) -> pd.Series:
         reasons.append("Parent/Family financial support identified")
 
     # -------- Private loan --------
-    if has_private_loan_text(row.get(COLS["private_loan"])):
+    private_loan_raw = row.get(COLS["private_loan"])
+    has_loan = has_private_loan_text(private_loan_raw)
+    if has_loan:
         score += PRIVATE_LOAN_WEIGHT
         reasons.append("Private / bank loan arranged or intended")
 
@@ -275,7 +330,14 @@ def score_row(row: pd.Series) -> pd.Series:
         reasons.append("Depends on scholarship from ASU/school")
 
     # -------- Age + degree --------
-    has_deg = is_yes(row.get(COLS["degree"]))
+    deg_text = (
+        row.get(COLS["degree"]) or
+        row.get("Degree (2)") or
+        row.get("Degree (3)")
+    )
+
+    has_deg = has_degree_text(deg_text)
+
     age_val = normalize_age(row.get(COLS["age"]))
     age_pts, age_reasons = age_degree_points(age_val, has_deg)
     score += age_pts
@@ -292,18 +354,25 @@ def score_row(row: pd.Series) -> pd.Series:
     if personal_statement_requests_school_scholarship(
         row.get(COLS["personal_statement"])
     ):
-        score -= 2
+        score -= 10
         reasons.append("Personal statement suggests need for ASU scholarship")
 
-    # -------- Category decision --------
+    # -------- Clamp score to 0–100 --------
+    score = max(0, min(100, score))
+
+    # -------- Category decision on 0–100 scale --------
     if is_region_top:
-        category = "Top priority (Canada / US / Europe)"
+        # Region priority: still special label
+        if score >= 70:
+            category = "Top priority (Canada / US / Europe)"
+        else:
+            category = "High potential (Canada / US / Europe – funding weaker)"
     else:
-        if score >= 8:
+        if score >= 70:
             category = "Top priority (Financially strong)"
-        elif score >= 5:
+        elif 50 <= score < 70:
             category = "High potential"
-        elif score >= 3:
+        elif 35 <= score < 50:
             category = "Medium potential"
         else:
             category = "Low / scholarship-dependent"
@@ -312,8 +381,17 @@ def score_row(row: pd.Series) -> pd.Series:
         "ComputedAge": age_val,
         "Score": score,
         "Category": category,
-        "Reasons": "; ".join(reasons)
+        "Reasons": "; ".join(reasons),
+
+        # extra flags so UI can filter
+        "HasFamilySupport": has_family,
+        "HasSelfSupport": has_self,
+        "HasPrivateLoan": has_loan,
+        "HasExternalScholarshipConfirmed": external_confirmed,
+        "HasExternalScholarshipPlanned": external_planned,
+        "HasASUScholarDependency": asu_school_scholar,
     })
+
 
 
 
@@ -358,23 +436,74 @@ if uploaded_file is not None:
     st.subheader("Full Scored Applicants")
     st.dataframe(df_scored)
 
-    # High priority (score >= 4)
-    high_priority = df_scored[df_scored["Score"] >= 4].copy()
+    # High priority (score >= 50)
+    high_priority = df_scored[df_scored["Score"] >= 50  ].copy()
+    
+    # Medium Priority (score 35-49)
+    medium_priority = df_scored[(df_scored["Score"] >= 35) & (df_scored["Score"] < 50)].copy()
+    
+    # Low Priority (score < 35)
+    low_priority = df_scored[df_scored["Score"] < 35].copy()
+    
 
     # Region-top: Canada/US/Europe
     region_top_mask = df_scored["Category"].str.contains("Canada / US / Europe", na=False)
     region_top = df_scored[region_top_mask].copy()
 
-    st.markdown("### High-Priority Applicants (Score ≥ 4)")
+    st.markdown("### High-Priority Applicants (Score ≥ 50)")
     st.write(f"Count: {high_priority.shape[0]}")
     st.dataframe(high_priority[HIGH_PRIORITY_COLUMNS] if all(
         c in high_priority.columns for c in HIGH_PRIORITY_COLUMNS
     ) else high_priority)
 
+    st.markdown("### Medium-Priority Applicants (Score 35–49)")
+    st.write(f"Count: {medium_priority.shape[0]}")
+    st.dataframe(medium_priority[HIGH_PRIORITY_COLUMNS] if all(
+        c in medium_priority.columns for c in HIGH_PRIORITY_COLUMNS
+    ) else medium_priority)
+    
     st.markdown("### Region-Top Applicants (Canada / US / Europe)")
     st.write(f"Count: {region_top.shape[0]}")
     st.dataframe(region_top)
 
+    st.markdown("### Low-Priority Applicants (Score < 35)")
+    st.write(f"Count: {low_priority.shape[0]}")
+    st.dataframe(low_priority[HIGH_PRIORITY_COLUMNS] if all(
+        c in low_priority.columns for c in HIGH_PRIORITY_COLUMNS
+    ) else low_priority)
+    
+     # ---- Parent-funded but Low-priority applicants ----
+    parent_funded_only_low = df_scored[
+        (df_scored["Category"] == "Low / scholarship-dependent") &
+        (df_scored["HasFamilySupport"] == True) &
+        (df_scored["HasSelfSupport"] == False) &
+        (df_scored["HasPrivateLoan"] == False) &
+        (df_scored["HasExternalScholarshipConfirmed"] == False) &
+        (df_scored["HasExternalScholarshipPlanned"] == False)
+    ].copy()
+
+    st.markdown("### Parent-funded but scored as LOW priority")
+    st.write(f"Count: {parent_funded_only_low.shape[0]}")
+
+    if not parent_funded_only_low.empty:
+        cols_for_review = [
+            c for c in [
+                "Name",
+                "Last",
+                "Country of Citizenship",
+                "Parent/Family Support",
+                "Other Sources",
+                "Score",
+                "Category",
+                "Reasons",
+            ] if c in parent_funded_only_low.columns
+        ]
+        st.dataframe(parent_funded_only_low[cols_for_review])
+
+    else:
+        st.caption("No applicants are parent-funded *only* and still in Low priority.")
+    
+    
     # Downloads
     st.markdown("### Download Results")
 
@@ -389,11 +518,43 @@ if uploaded_file is not None:
     # High priority only (selected columns + reasons)
     hp_cols = [c for c in HIGH_PRIORITY_COLUMNS if c in high_priority.columns]
     high_priority_export = high_priority[hp_cols] if hp_cols else high_priority
+    
+    # medium priority only (selected columns + reasons)
+    mp_cols = [c for c in HIGH_PRIORITY_COLUMNS if c in medium_priority.columns]
+    medium_priority_export = medium_priority[mp_cols] if mp_cols else medium_priority
+    
+    # low priority only (selected columns + reasons)
+    lp_cols = [c for c in HIGH_PRIORITY_COLUMNS if c in low_priority.columns]
+    low_priority_export = low_priority[lp_cols] if lp_cols else low_priority
+    
+   
 
     st.download_button(
-        label="📥 Download high-priority (Score ≥ 4)",
+        label="📥 Download high-priority (Score ≥ 50)",
         data=to_excel_bytes(high_priority_export),
-        file_name="asu_high_priority_4plus.xlsx",
+        file_name="asu_high_priority_50plus.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    
+    st.download_button(
+        label="📥 Download medium-priority (Score ≥ 35)",
+        data=to_excel_bytes(medium_priority_export),
+        file_name="asu_medium_priority_35plus.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    
+    st.download_button(
+        label="📥 Download low-priority (Score < 35)",
+        data=to_excel_bytes(low_priority_export),
+        file_name="asu_low_priority_below35.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    
+    
+    st.download_button(
+        label="📥 Download parent-funded but LOW-priority list",
+        data=to_excel_bytes(parent_funded_only_low[cols_for_review]),
+        file_name="asu_parent_funded_low_priority.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 

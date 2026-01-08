@@ -180,6 +180,12 @@ def parse_scholarship_text(value):
     if t in NEGATIVE_WORDS:
         return {"external_confirmed": False, "external_planned": False, "asu_school": False}
 
+    # If the applicant simply answered "yes" (or "y"), treat as "plans" to obtain
+    # a scholarship rather than confirmed details; this catches simple boolean fields
+    # where users tick/enter "yes" without further detail.
+    if t in {"yes", "y"}:
+        return {"external_confirmed": False, "external_planned": True, "asu_school": False}
+
     # Any scholarship/bursary/grant/NSFAS/SASSA/etc.
     schol_keywords = [
         "scholar", "bursary", "grant", "nsfas", "sassa", "sponsor", "sponsorship", "fund"
@@ -434,6 +440,7 @@ if uploaded_file is not None:
         df_scored = pd.concat([df, results], axis=1)
 
     st.subheader("Full Scored Applicants")
+    st.write(f"Total applicants scored: {df_scored.shape[0]}")
     st.dataframe(df_scored)
 
     # High priority (score >= 50)

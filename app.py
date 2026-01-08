@@ -450,7 +450,7 @@ if uploaded_file is not None:
     region_top_mask = df_scored["Category"].str.contains("Canada / US / Europe", na=False)
     region_top = df_scored[region_top_mask].copy()
 
-    st.markdown("### High-Priority Applicants (Score ≥ 50)")
+    st.markdown("### High/Top-Priority Applicants (Score ≥ 50)")
     st.write(f"Count: {high_priority.shape[0]}")
     st.dataframe(high_priority[HIGH_PRIORITY_COLUMNS] if all(
         c in high_priority.columns for c in HIGH_PRIORITY_COLUMNS
@@ -530,7 +530,7 @@ if uploaded_file is not None:
    
 
     st.download_button(
-        label="📥 Download high-priority (Score ≥ 50)",
+        label="📥 Download high/top-priority (Score ≥ 50)",
         data=to_excel_bytes(high_priority_export),
         file_name="asu_high_priority_50plus.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

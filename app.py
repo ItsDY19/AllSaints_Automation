@@ -439,7 +439,6 @@ if uploaded_file is not None:
         results = df.apply(score_row, axis=1)
         df_scored = pd.concat([df, results], axis=1)
         
-    st.write("### Scoring complete. Below are the tables of prioritized applicants from highest to lowest.")
 
     st.subheader("Full Scored Applicants")
     
@@ -475,6 +474,8 @@ if uploaded_file is not None:
     .sort_values(by="Score", ascending=False)
     .copy()
 )
+    
+    st.write("#### Scoring complete. Below are the tables of prioritized applicants from highest to lowest.")
 
     st.markdown("### High/Top-Priority Applicants (Score ≥ 50)")
     st.write(f"Count: {high_priority.shape[0]}")

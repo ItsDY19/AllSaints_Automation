@@ -438,24 +438,43 @@ if uploaded_file is not None:
     with st.spinner("Scoring applicants..."):
         results = df.apply(score_row, axis=1)
         df_scored = pd.concat([df, results], axis=1)
+        
+    st.write("### Scoring complete. Below are the tables of prioritized applicants from highest to lowest.")
 
     st.subheader("Full Scored Applicants")
+    
     st.write(f"Total applicants scored: {df_scored.shape[0]}")
     st.dataframe(df_scored)
 
     # High priority (score >= 50)
-    high_priority = df_scored[df_scored["Score"] >= 50  ].copy()
+    high_priority = (
+        df_scored[df_scored["Score"] >= 50]
+        .sort_values(by="Score", ascending=False) # sort high to low
+        .copy()
+    )
     
     # Medium Priority (score 35-49)
-    medium_priority = df_scored[(df_scored["Score"] >= 35) & (df_scored["Score"] < 50)].copy()
+    medium_priority = (
+    df_scored[(df_scored["Score"] >= 35) & (df_scored["Score"] < 50)]
+    .sort_values(by="Score", ascending=False) # sort high to low
+    .copy()
+)
     
     # Low Priority (score < 35)
-    low_priority = df_scored[df_scored["Score"] < 35].copy()
+    low_priority = (
+    df_scored[df_scored["Score"] < 35]
+    .sort_values(by="Score", ascending=False) # sort high to low
+    .copy()
+)
     
 
     # Region-top: Canada/US/Europe
     region_top_mask = df_scored["Category"].str.contains("Canada / US / Europe", na=False)
-    region_top = df_scored[region_top_mask].copy()
+    region_top = (
+    df_scored[region_top_mask]
+    .sort_values(by="Score", ascending=False)
+    .copy()
+)
 
     st.markdown("### High/Top-Priority Applicants (Score ≥ 50)")
     st.write(f"Count: {high_priority.shape[0]}")

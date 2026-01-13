@@ -24,6 +24,7 @@ HIGH_PRIORITY_COLUMNS = [
     "WhatsApp Phone Number",
     "Email",
     "Program of Interest",
+    "Select A Term",
     "Country of Citizenship",
     "Score",
     "Category",

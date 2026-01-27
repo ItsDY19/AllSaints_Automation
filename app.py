@@ -46,6 +46,24 @@ EUROPE_COUNTRIES = [
     "greece", "czech", "hungary", "romania", "iceland"
 ]
 
+CARIBBEAN_COUNTRIES = [
+    # Big islands / common spellings
+    "jamaica", "haiti", "dominican republic", "dr",
+    "trinidad", "trinidad and tobago", "tobago",
+    "barbados", "bahamas", "grenada", "st lucia", "saint lucia",
+    "st vincent", "saint vincent", "st vincent and the grenadines",
+    "antigua", "antigua and barbuda",
+    "st kitts", "saint kitts", "st kitts and nevis", "saint kitts and nevis",
+    "dominica",
+    "cuba", "puerto rico",
+
+    # Territories / common entries
+    "guadeloupe", "martinique", "cayman", "cayman islands",
+    "turks", "turks and caicos", "aruba", "curacao", "curaçao",
+    "bonaire", "bermuda", "virgin islands", "u.s. virgin islands", "british virgin islands",
+    "anguilla", "montserrat",
+]
+
 SCHOLARSHIP_NEED_KEYWORDS = [
     "scholarship", "financial aid", "bursary",
     "can't afford", "cannot afford",
@@ -251,7 +269,8 @@ def country_priority_flag(country_raw: str):
     """
     Returns:
         is_region_top (bool), points (int), reasons (list[str])
-    Canada / US / Europe get a strong region bonus on a 0–100 scale.
+
+    Canada / US / Europe / Caribbean are top priority regions.
     """
     if not isinstance(country_raw, str):
         return False, 0, []
@@ -259,22 +278,30 @@ def country_priority_flag(country_raw: str):
     c = country_raw.strip().lower()
     reasons = []
 
+    REGION_BONUS = 40  # keep same bonus
+
     # Canada
     if "canada" in c:
-        reasons.append("From Canada — automatic top priority region")
-        return True, 40, reasons
+        reasons.append("From Canada — top priority region")
+        return True, REGION_BONUS, reasons
 
     # USA
     if "united states" in c or "usa" in c or "u.s.a" in c or "america" in c:
-        reasons.append("From USA — automatic top priority region")
-        return True, 40, reasons
+        reasons.append("From USA — top priority region")
+        return True, REGION_BONUS, reasons
 
     # Europe
     if any(e in c for e in EUROPE_COUNTRIES):
-        reasons.append("From Europe — automatic top priority region")
-        return True, 40, reasons
+        reasons.append("From Europe — top priority region")
+        return True, REGION_BONUS, reasons
+
+    # Caribbean ✅ NEW
+    if any(k in c for k in CARIBBEAN_COUNTRIES):
+        reasons.append("From Caribbean — top priority region")
+        return True, REGION_BONUS, reasons
 
     return False, 0, reasons
+
 
 
 def personal_statement_requests_school_scholarship(text: str) -> bool:
@@ -371,9 +398,9 @@ def score_row(row: pd.Series) -> pd.Series:
     if is_region_top:
         # Region priority: still special label
         if score >= 70:
-            category = "Top priority (Canada / US / Europe)"
+            category = "Top priority (Canada / US / Europe / Caribbean)"
         else:
-            category = "High potential (Canada / US / Europe – funding weaker)"
+            category = "High potential (Canada / US / Europe / Caribbean – funding weaker)"
     else:
         if score >= 70:
             category = "Top priority (Financially strong)"
@@ -435,6 +462,38 @@ if uploaded_file is not None:
 
     st.success(f"Loaded {df.shape[0]} rows and {df.shape[1]} columns.")
 
+# -------- Deduplicate: keep most recent submission per applicant --------
+
+    email_col = "Email"
+    name_col = "Name"
+    dob_col = "Date of Birth"
+    time_col = "Date Created"  # change if your Wufoo column has a different name
+
+    df_before_dedup = df.copy()
+
+    # 1️⃣ Sort by submission time if available
+    if time_col in df.columns:
+        df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
+        df = df.sort_values(by=time_col)
+
+    # 2️⃣ Primary dedupe by Email (most reliable unique identifier)
+    if email_col in df.columns:
+        df = df.drop_duplicates(subset=[email_col], keep="last")
+
+    # 3️⃣ Fallback dedupe ONLY for rows missing email
+    if all(col in df.columns for col in [name_col, dob_col]):
+        no_email_mask = df[email_col].isna() | (df[email_col].str.strip() == "")
+        df_no_email = df[no_email_mask].drop_duplicates(subset=[name_col, dob_col], keep="last")
+        df_with_email = df[~no_email_mask]
+        df = pd.concat([df_with_email, df_no_email])
+
+    dedup_count = len(df_before_dedup) - len(df)
+
+    if dedup_count > 0:
+        st.info(f"Removed {dedup_count} duplicate submission(s) — keeping the most recent per applicant.")
+
+
+
     # Score applicants
     with st.spinner("Scoring applicants..."):
         results = df.apply(score_row, axis=1)
@@ -468,8 +527,8 @@ if uploaded_file is not None:
 )
     
 
-    # Region-top: Canada/US/Europe
-    region_top_mask = df_scored["Category"].str.contains("Canada / US / Europe", na=False)
+    # Region-top: Canada/US/Europe/Caribbean
+    region_top_mask = df_scored["Category"].str.contains("Canada / US / Europe / Caribbean", na=False)
     region_top = (
     df_scored[region_top_mask]
     .sort_values(by="Score", ascending=False)

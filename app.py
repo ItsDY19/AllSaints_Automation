@@ -295,7 +295,7 @@ def country_priority_flag(country_raw: str):
         reasons.append("From Europe — top priority region")
         return True, REGION_BONUS, reasons
 
-    # Caribbean ✅ NEW
+    # Caribbean
     if any(k in c for k in CARIBBEAN_COUNTRIES):
         reasons.append("From Caribbean — top priority region")
         return True, REGION_BONUS, reasons
@@ -549,7 +549,7 @@ if uploaded_file is not None:
         c in medium_priority.columns for c in HIGH_PRIORITY_COLUMNS
     ) else medium_priority)
     
-    st.markdown("### Region-Top Applicants (Canada / US / Europe)")
+    st.markdown("### Region-Top Applicants (Canada / US / Europe / Caribbean)")
     st.write(f"Count: {region_top.shape[0]}")
     st.dataframe(region_top)
 
@@ -647,7 +647,7 @@ if uploaded_file is not None:
 
     # Region-top download
     st.download_button(
-        label="📥 Download region-top (Canada / US / Europe)",
+        label="📥 Download region-top (Canada / US / Europe / Caribbean)",
         data=to_excel_bytes(region_top),
         file_name="asu_region_top.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
